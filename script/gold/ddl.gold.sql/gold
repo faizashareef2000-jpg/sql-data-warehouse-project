@@ -1,25 +1,56 @@
+--=============================================
+--Create Gold Layer: Dim_customer
+--Pirpose: Create Customer dimension table with clean and enriched customer information
+--=============================================
+IF OBJECT_ID('gold.dim_customers', 'V') IS NOT NULL
+   DROP VIEW gold.dim_customers;
+GO
 CREATE VIEW gold.dim_customers AS 
 SELECT 
+--Create Surrogate Key for dimension Table
+
    ROW_NUMBER() OVER (ORDER BY cst_id) AS customer_key,
+--Customer Identifiers
     ci.cst_id AS customer_id,
     ci.cst_key AS customer_number,
+--Customer Personal Details
     ci.cst_firstname AS first_name,
     ci.cst_lastname AS last_name,
     la.cntry,
     ci.cst_marital_status AS marital_status,
+
+--Use CRM gender table If available,
+--Otherwise fallback to ERP gender
+
     CASE WHEN ci.cst_gndr ! = 'n/a' THEN ci.cst_gndr
      ELSE COALESCE(ca.gen,'n/a')
      END AS gender,
      ca.bdate,
     ci.cst_create_date AS create_date
 FROM      silver.crm_cust_info ci
+--======================================
+--Join additional Customer Information
+--======================================
 LEFT JOIN silver.erp_cust_az12 ca
 ON        ci.cst_key = ca.cid
+--=====================================
+--Join Customer Location Data
+--====================================
 LEFT JOIN silver.erp_loc_a101 la
 ON        ci.cst_key = la.cid
 
+--============================================================
+--Create Gold Layer: Dimension_products
+--Purpose: Creates Product Dimension table containing product
+--hierarchy and category information
+--============================================================
+IF OBJECT_ID('gold.dim_products', 'V') IS NOT NULL
+   DROP VIEW gold.dim_products;
+GO
+
 CREATE VIEW gold.dim_products AS 
 SELECT 
+--Generate Surrogate Key for Products
 ROW_NUMBER() OVER (ORDER BY pn.prd_start_date, pn.prd_id) AS product_key,
    pn.prd_id AS product_id,
    pn.prd_key AS product_number,
@@ -32,13 +63,24 @@ ROW_NUMBER() OVER (ORDER BY pn.prd_start_date, pn.prd_id) AS product_key,
    pn.prd_line AS product_line,
    pn.prd_start_date AS start_date
 FROM silver.crm_prd_info pn
+--===================================
+--Join Product Category details
+--===================================
 LEFT JOIN silver.erp_px_cat_g1v2 pc
 ON        pn.cat_id =pc.id
-WHERE prd_end_date IS NULL
-
+WHERE prd_end_date IS NULL-- Keep Only Active products
+--=================================================================
+--Gold Layer: fact_sales
+--Purpose:Creates Fact tables containing transactional sales data 
+--linked to dimensions
+--=================================================================
+IF OBJECT_ID('gold.fact_sales', 'V') IS NOT NULL
+   DROP VIEW gold.fact_sales;
+GO
 CREATE VIEW gold.fact_sales AS
 SELECT 
    sd.sls_ord_num AS order_number,
+--Foreign Key From dimension Tables
    pr.product_key,
    cu.customer_key,
    sd.sls_order_dt AS order_date,
@@ -48,7 +90,9 @@ SELECT
    sd.sls_quantity AS quantity,
    sd.sls_price AS price
 FROM silver.crm_sales_details_info sd
+--Join Product Dimensions
 LEFT JOIN gold.dim_products pr
 ON sd.sls_prd_key = pr.product_number
+--Join Customer Dimension
 LEFT JOIN gold.dim_customers cu
 ON sd.sls_cust_id = cu.customer_id
